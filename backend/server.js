@@ -6,6 +6,7 @@ const express = require('express');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
+const path = require('path');
 
 // Inicializa o aplicativo Express
 const app = express();
@@ -13,6 +14,7 @@ const app = express();
 // Middlewares para processar JSON e habilitar CORS
 app.use(express.json());
 app.use(cors());
+app.use(express.static(path.join(__dirname, 'dist')));
 
 // Configuração da conexão com o banco de dados usando as variáveis do .env
 const dbConfig = {
@@ -22,6 +24,9 @@ const dbConfig = {
     password: process.env.DB_PASSWORD,
     database: process.env.DB_DATABASE,
     decimalNumbers: true
+    ssl: {
+        rejectUnauthorized: false // <--- ADICIONE ISTO
+    }
 };
 
 // --- ENDPOINTS DA API ---
@@ -97,6 +102,9 @@ app.get('/api/clientes/:id', async (req, res) => {
     } catch (error) {
         res.status(500).json({ message: 'Erro ao buscar cliente' });
     }
+});
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 app.post('/api/clientes', async (req, res) => {
     const { nome, telefone, cep, endereco, bairro, cidade } = req.body;
