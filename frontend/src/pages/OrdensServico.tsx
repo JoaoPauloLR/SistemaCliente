@@ -17,7 +17,7 @@ import {
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
 
-const API_URL = "";
+const API_URL = "https://api-sistemacliente.onrender.com";
 const ITEMS_PER_PAGE = 10;
 
 interface OrdemServico {

@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/dialog";
 
 // Define a URL base da sua API para facilitar a manutenção
-const API_URL = "";
+const API_URL = "https://api-sistemacliente.onrender.com";
 
 const Login = () => {
   const [login, setLogin] = useState("");

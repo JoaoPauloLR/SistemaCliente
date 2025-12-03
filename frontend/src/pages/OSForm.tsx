@@ -26,7 +26,7 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 
-const API_URL = "";
+const API_URL = "https://api-sistemacliente.onrender.com";
 
 const getUserId = () => {
   const user = localStorage.getItem("osys-user");

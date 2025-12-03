@@ -28,7 +28,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 
-const API_URL = "";
+const API_URL = "https://api-sistemacliente.onrender.com";
 
 interface OSDetalhesType {
     CodigoOS: number;

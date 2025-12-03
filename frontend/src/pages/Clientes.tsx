@@ -39,7 +39,7 @@ import {
 } from "@/components/ui/dialog";
 import { useNavigate } from "react-router-dom";
 
-const API_URL = "";
+const API_URL = "https://api-sistemacliente.onrender.com";
 const ITEMS_PER_PAGE = 10;
 
 interface Cliente {
