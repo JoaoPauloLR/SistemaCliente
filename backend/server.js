@@ -31,25 +31,35 @@ const dbConfig = {
 
 // --- ENDPOINTS DA API ---
 
-// Endpoint de Login
+// Endpoint de Login (CORRIGIDO E COM DEBUG)
 app.post('/api/login', async (req, res) => {
     const { login, senha } = req.body;
+    
+    // Validação básica
     if (!login || !senha) {
         return res.status(400).json({ success: false, message: 'Login e senha são obrigatórios.' });
     }
+
     try {
         const connection = await mysql.createConnection(dbConfig);
+        
+        // Busca o usuário e a senha (hash) no banco
         const [rows] = await connection.execute(
             'SELECT cod_F, nome, senha FROM Funcionario INNER JOIN Pessoa ON Funcionario.cod_F = Pessoa.cod_P WHERE login = ?',
             [login]
         );
         await connection.end();
+
+        // Se não achou ninguém
         if (rows.length === 0) {
-            return res.status(401).json({ success: false, message: 'Login ou senha inválidos.' });
+            return res.status(401).json({ success: false, message: 'Usuário não encontrado.' });
         }
+
         const user = rows[0];
-        const storedHash = user.senha;
-        const passwordMatch = await bcrypt.compare(senha, storedHash);
+        
+        // Compara a senha digitada com o hash do banco
+        const passwordMatch = await bcrypt.compare(senha, user.senha);
+
         if (passwordMatch) {
             res.json({
                 success: true,
@@ -58,15 +68,17 @@ app.post('/api/login', async (req, res) => {
                 userName: user.nome
             });
         } else {
-            res.status(401).json({ success: false, message: 'Login ou senha inválidos.' });
+            res.status(401).json({ success: false, message: 'Senha incorreta.' });
         }
+
     } catch (error) {
         console.error('Erro no login:', error);
+        // AQUI ESTÁ O TRUQUE: Envia o erro real para você ler no navegador
         res.status(500).json({ 
-        success: false, 
-        message: 'ERRO DETALHADO: ' + error.message
+            success: false, 
+            message: 'ERRO DO SISTEMA: ' + error.message 
+        });
     }
-                             }
 });
 
 // --- Endpoints de Clientes ---
