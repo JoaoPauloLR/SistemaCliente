@@ -62,7 +62,9 @@ app.post('/api/login', async (req, res) => {
         }
     } catch (error) {
         console.error('Erro no login:', error);
-        res.status(500).json({ success: false, message: 'Erro interno do servidor.' });
+        res.status(500).json({ 
+        success: false, 
+        message: 'ERRO DETALHADO: ' + error.message
     }
 });
 
