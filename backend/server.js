@@ -66,6 +66,7 @@ app.post('/api/login', async (req, res) => {
         success: false, 
         message: 'ERRO DETALHADO: ' + error.message
     }
+                             }
 });
 
 // --- Endpoints de Clientes ---
