@@ -118,9 +118,7 @@ app.get('/api/clientes/:id', async (req, res) => {
         res.status(500).json({ message: 'Erro ao buscar cliente' });
     }
 });
-app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
-});
+
 app.post('/api/clientes', async (req, res) => {
     const { nome, telefone, cep, endereco, bairro, cidade } = req.body;
     if (!nome || !cidade) {
@@ -427,6 +425,10 @@ app.post('/api/relatorio/detalhado', async (req, res) => {
         console.error('Erro ao gerar relatório detalhado:', error);
         res.status(500).json({ success: false, message: 'Erro interno do servidor ao gerar relatório detalhado.' });
     }
+});
+
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
 // Inicia o servidor
