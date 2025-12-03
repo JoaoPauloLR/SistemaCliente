@@ -24,7 +24,6 @@ const dbConfig = {
     password: process.env.DB_PASSWORD,
     database: process.env.DB_DATABASE,
     decimalNumbers: true,
-    // ADICIONE ESTA PARTE ABAIXO:
     ssl: {
         rejectUnauthorized: false
     }
