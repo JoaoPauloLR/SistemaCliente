@@ -14,9 +14,11 @@ const app = express();
 // Middlewares para processar JSON e habilitar CORS
 app.use(express.json());
 app.use(cors());
+
+// Servir arquivos estáticos do React (Frontend)
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// Configuração da conexão com o banco de dados usando as variáveis do .env
+// Configuração da conexão com o banco de dados
 const dbConfig = {
     host: process.env.DB_HOST,
     port: process.env.DB_PORT,
@@ -31,35 +33,24 @@ const dbConfig = {
 
 // --- ENDPOINTS DA API ---
 
-// Endpoint de Login (CORRIGIDO E COM DEBUG)
+// Endpoint de Login
 app.post('/api/login', async (req, res) => {
     const { login, senha } = req.body;
-    
-    // Validação básica
     if (!login || !senha) {
         return res.status(400).json({ success: false, message: 'Login e senha são obrigatórios.' });
     }
-
     try {
         const connection = await mysql.createConnection(dbConfig);
-        
-        // Busca o usuário e a senha (hash) no banco
         const [rows] = await connection.execute(
             'SELECT cod_F, nome, senha FROM Funcionario INNER JOIN Pessoa ON Funcionario.cod_F = Pessoa.cod_P WHERE login = ?',
             [login]
         );
         await connection.end();
-
-        // Se não achou ninguém
         if (rows.length === 0) {
             return res.status(401).json({ success: false, message: 'Usuário não encontrado.' });
         }
-
         const user = rows[0];
-        
-        // Compara a senha digitada com o hash do banco
         const passwordMatch = await bcrypt.compare(senha, user.senha);
-
         if (passwordMatch) {
             res.json({
                 success: true,
@@ -70,14 +61,9 @@ app.post('/api/login', async (req, res) => {
         } else {
             res.status(401).json({ success: false, message: 'Senha incorreta.' });
         }
-
     } catch (error) {
         console.error('Erro no login:', error);
-        // AQUI ESTÁ O TRUQUE: Envia o erro real para você ler no navegador
-        res.status(500).json({ 
-            success: false, 
-            message: 'ERRO DO SISTEMA: ' + error.message 
-        });
+        res.status(500).json({ success: false, message: 'Erro interno: ' + error.message });
     }
 });
 
@@ -89,9 +75,10 @@ app.get('/api/clientes', async (req, res) => {
         await connection.end();
         res.json(rows);
     } catch (error) {
-        res.status(500).json({ success: false, message: 'Erro ao buscar clientes.' });
+        res.status(500).json({ success: false, message: 'Erro ao buscar clientes: ' + error.message });
     }
 });
+
 app.get('/api/clientes/search', async (req, res) => {
     const searchTerm = req.query.q;
     if (!searchTerm) { return res.json([]); }
@@ -104,6 +91,7 @@ app.get('/api/clientes/search', async (req, res) => {
         res.status(500).json({ success: false, message: 'Erro ao buscar clientes.' });
     }
 });
+
 app.get('/api/clientes/:id', async (req, res) => {
     try {
         const connection = await mysql.createConnection(dbConfig);
@@ -119,50 +107,103 @@ app.get('/api/clientes/:id', async (req, res) => {
     }
 });
 
+// --- AQUI FOI FEITA A CORREÇÃO PRINCIPAL (INCLUINDO UF) ---
 app.post('/api/clientes', async (req, res) => {
-    const { nome, telefone, cep, endereco, bairro, cidade } = req.body;
-    if (!nome || !cidade) {
-        return res.status(400).json({ success: false, message: 'Nome e cidade são obrigatórios.' });
+    // 1. Recebemos 'uf' do frontend
+    const { nome, telefone, cep, endereco, bairro, cidade, uf } = req.body;
+    
+    if (!nome || !cidade || !uf) {
+        return res.status(400).json({ success: false, message: 'Nome, cidade e UF são obrigatórios.' });
     }
+    
     let connection;
     try {
         connection = await mysql.createConnection(dbConfig);
         await connection.beginTransaction();
-        let [[cidadeExistente]] = await connection.execute('SELECT cod_Ci FROM Cidade WHERE nome = ?', [cidade]);
-        let cidadeId = cidadeExistente ? cidadeExistente.cod_Ci : (await connection.execute('INSERT INTO Cidade (nome) VALUES (?)', [cidade]))[0].insertId;
+
+        // 2. Verificamos se a cidade existe (agora checando Nome E UF)
+        let [[cidadeExistente]] = await connection.execute(
+            'SELECT cod_Ci FROM Cidade WHERE nome = ? AND UF = ?', 
+            [cidade, uf]
+        );
+
+        let cidadeId;
+        if (cidadeExistente) {
+            cidadeId = cidadeExistente.cod_Ci;
+        } else {
+            // 3. Se não existe, criamos COM A UF
+            const [result] = await connection.execute(
+                'INSERT INTO Cidade (nome, UF) VALUES (?, ?)', 
+                [cidade, uf]
+            );
+            cidadeId = result.insertId;
+        }
+
         const [pessoaResult] = await connection.execute('INSERT INTO Pessoa (nome) VALUES (?)', [nome]);
         const novoClienteId = pessoaResult.insertId;
-        await connection.execute('INSERT INTO Cliente (cod_C, cod_Ci, telefone, cep, endereco, bairro) VALUES (?, ?, ?, ?, ?, ?)', [novoClienteId, cidadeId, telefone, cep, endereco, bairro]);
+        
+        await connection.execute(
+            'INSERT INTO Cliente (cod_C, cod_Ci, telefone, cep, endereco, bairro) VALUES (?, ?, ?, ?, ?, ?)', 
+            [novoClienteId, cidadeId, telefone, cep, endereco, bairro]
+        );
+        
         await connection.commit();
         await connection.end();
         res.status(201).json({ success: true, message: 'Cliente cadastrado com sucesso!', newId: novoClienteId });
     } catch (error) {
         if (connection) await connection.rollback();
-        res.status(500).json({ success: false, message: 'Erro interno do servidor ao cadastrar cliente.' });
+        // Mostra o erro real se falhar
+        res.status(500).json({ success: false, message: 'Erro ao cadastrar: ' + error.message });
     }
 });
+
 app.put('/api/clientes/:id', async (req, res) => {
     const clienteId = req.params.id;
-    const { nome, telefone, cep, endereco, bairro, cidade } = req.body;
-    if (!nome || !cidade) {
-        return res.status(400).json({ success: false, message: 'Nome e cidade são obrigatórios.' });
+    // 1. Recebemos 'uf' na edição também
+    const { nome, telefone, cep, endereco, bairro, cidade, uf } = req.body;
+    
+    if (!nome || !cidade || !uf) {
+        return res.status(400).json({ success: false, message: 'Nome, cidade e UF são obrigatórios.' });
     }
+    
     let connection;
     try {
         connection = await mysql.createConnection(dbConfig);
         await connection.beginTransaction();
+        
         await connection.execute('UPDATE Pessoa SET nome = ? WHERE cod_P = ?', [nome, clienteId]);
-        let [[cidadeExistente]] = await connection.execute('SELECT cod_Ci FROM Cidade WHERE nome = ?', [cidade]);
-        let cidadeId = cidadeExistente ? cidadeExistente.cod_Ci : (await connection.execute('INSERT INTO Cidade (nome) VALUES (?)', [cidade]))[0].insertId;
-        await connection.execute('UPDATE Cliente SET telefone = ?, cep = ?, endereco = ?, bairro = ?, cod_Ci = ? WHERE cod_C = ?', [telefone, cep, endereco, bairro, cidadeId, clienteId]);
+        
+        // Lógica de cidade corrigida igual ao POST
+        let [[cidadeExistente]] = await connection.execute(
+            'SELECT cod_Ci FROM Cidade WHERE nome = ? AND UF = ?', 
+            [cidade, uf]
+        );
+        
+        let cidadeId;
+        if (cidadeExistente) {
+            cidadeId = cidadeExistente.cod_Ci;
+        } else {
+            const [result] = await connection.execute(
+                'INSERT INTO Cidade (nome, UF) VALUES (?, ?)', 
+                [cidade, uf]
+            );
+            cidadeId = result.insertId;
+        }
+
+        await connection.execute(
+            'UPDATE Cliente SET telefone = ?, cep = ?, endereco = ?, bairro = ?, cod_Ci = ? WHERE cod_C = ?', 
+            [telefone, cep, endereco, bairro, cidadeId, clienteId]
+        );
+        
         await connection.commit();
         await connection.end();
         res.json({ success: true, message: 'Cliente atualizado com sucesso!' });
     } catch (error) {
         if (connection) await connection.rollback();
-        res.status(500).json({ success: false, message: 'Erro interno do servidor ao atualizar cliente.' });
+        res.status(500).json({ success: false, message: 'Erro ao atualizar: ' + error.message });
     }
 });
+
 app.delete('/api/clientes/:id', async (req, res) => {
     const clienteId = req.params.id;
     let connection;
@@ -183,7 +224,7 @@ app.delete('/api/clientes/:id', async (req, res) => {
         res.json({ success: true, message: 'Cliente excluído com sucesso!' });
     } catch (error) {
         if (connection) await connection.rollback();
-        res.status(500).json({ success: false, message: 'Erro interno do servidor ao excluir cliente.' });
+        res.status(500).json({ success: false, message: 'Erro ao excluir: ' + error.message });
     }
 });
 
@@ -256,18 +297,23 @@ app.post('/api/os', async (req, res) => {
         if (!cliente) throw new Error("Cliente não encontrado.");
         const cod_Ci = cliente.cod_Ci;
         const [aparelhoResult] = await connection.execute('INSERT INTO Aparelho (codigo, nome, marca, modelo, serie, defeito) VALUES (?, ?, ?, ?, ?, ?)', [aparelho_codigo, aparelho_nome, marca, modelo, serie, defeito]);
-        const novoAparelhoCodigo = aparelhoResult.insertId;
+        const novoAparelhoCodigo = aparelhoResult.insertId; // Note: codigo is usually inserted explicitly or AI. If structure changed to AI, use insertId. If manual, use aparelho_codigo.
+        // Based on your SQL: `codigo` bigint(20) NOT NULL (no AUTO_INCREMENT in some versions, but server.js implies insert). 
+        // Let's assume inserting the timestamp as ID is the logic intended:
+        // Actually, let's fix logic: if SQL has no AI on codigo, we must use the value we passed.
+        const finalAparelhoCodigo = novoAparelhoCodigo || aparelho_codigo; 
+
         const [servicoResult] = await connection.execute('INSERT INTO Servico (descPecas, descServico, valorPecas, valorServico, desconto) VALUES (?, ?, ?, ?, ?)', [descPecas, descServico, valorPecas || 0, valorServico || 0, desconto || 0]);
         const novoServicoId = servicoResult.insertId;
         const isFinalized = status === 'Fechado' || status === 'Aguardando Pagamento';
         const finalDataSaida = (isFinalized && !dataSaida) ? new Date() : (dataSaida || null);
-        await connection.execute('INSERT INTO OrdemDeServico (cod_C, cod_F, cod_Ci, cod_S, codigo, dataEntrada, dataSaida, observacao, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [cod_C, cod_F, cod_Ci, novoServicoId, novoAparelhoCodigo, dataEntrada, finalDataSaida, observacao, status]);
+        await connection.execute('INSERT INTO OrdemDeServico (cod_C, cod_F, cod_Ci, cod_S, codigo, dataEntrada, dataSaida, observacao, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [cod_C, cod_F, cod_Ci, novoServicoId, finalAparelhoCodigo, dataEntrada, finalDataSaida, observacao, status]);
         await connection.commit();
         await connection.end();
         res.status(201).json({ success: true, message: 'Ordem de Serviço criada com sucesso!' });
     } catch (error) {
         if (connection) await connection.rollback();
-        res.status(500).json({ success: false, message: 'Erro interno do servidor ao criar OS.' });
+        res.status(500).json({ success: false, message: 'Erro ao criar OS: ' + error.message });
     }
 });
 app.put('/api/os/:id', async (req, res) => {
@@ -290,7 +336,7 @@ app.put('/api/os/:id', async (req, res) => {
         res.json({ success: true, message: 'Ordem de Serviço atualizada com sucesso!' });
     } catch (error) {
         if (connection) await connection.rollback();
-        res.status(500).json({ success: false, message: 'Erro interno do servidor ao atualizar OS.' });
+        res.status(500).json({ success: false, message: 'Erro ao atualizar OS: ' + error.message });
     }
 });
 app.delete('/api/os/:id', async (req, res) => {
@@ -301,7 +347,7 @@ app.delete('/api/os/:id', async (req, res) => {
         await connection.end();
         res.json({ success: true, message: 'Ordem de Serviço excluída com sucesso!' });
     } catch (error) {
-        res.status(500).json({ success: false, message: 'Erro interno do servidor ao excluir OS.' });
+        res.status(500).json({ success: false, message: 'Erro ao excluir OS.' });
     }
 });
 
@@ -310,7 +356,6 @@ app.get('/api/dashboard/stats', async (req, res) => {
   try {
     const connection = await mysql.createConnection(dbConfig);
     const getClosedMonthsStats = async (months) => {
-        // MODIFICADO: Adicionado "AND os.status = 'Fechado'"
         const [rows] = await connection.execute(`
             SELECT COUNT(os.cod_Os) as osCount,
                    COALESCE(SUM(s.valorPecas + s.valorServico - IFNULL(s.desconto, 0)), 0) AS faturamento
@@ -326,13 +371,11 @@ app.get('/api/dashboard/stats', async (req, res) => {
     };
     const [osAbertasRows] = await connection.execute('SELECT COUNT(*) AS count FROM OrdemDeServico WHERE status = "Aberto" OR status = "Aguardando Aprovação"');
     const [osAguardandoPagamentoRows] = await connection.execute('SELECT COUNT(*) as count FROM OrdemDeServico WHERE status = "Aguardando Pagamento"');
-    // MODIFICADO: Adicionado "AND os.status = 'Fechado'"
     const [mesAtualRows] = await connection.execute(`
         SELECT COUNT(os.cod_Os) as osCount,
                COALESCE(SUM(s.valorPecas + s.valorServico - IFNULL(s.desconto, 0)), 0) AS faturamento
         FROM OrdemDeServico os LEFT JOIN Servico s ON s.cod_S = os.cod_S
         WHERE YEAR(os.dataSaida) = YEAR(CURDATE()) AND MONTH(os.dataSaida) = MONTH(CURDATE()) AND os.status = 'Fechado'`);
-    // MODIFICADO: Adicionado "AND os.status = 'Fechado'"
     const [mesAnteriorRows] = await connection.execute(`
         SELECT COUNT(os.cod_Os) as osCount,
                COALESCE(SUM(s.valorPecas + s.valorServico - IFNULL(s.desconto, 0)), 0) AS faturamento
@@ -375,7 +418,6 @@ app.post('/api/relatorio', async (req, res) => {
     }
     try {
         const connection = await mysql.createConnection(dbConfig);
-        // MODIFICADO: Adicionado "AND os.status = 'Fechado'" em todas as queries financeiras
         const [gastosPecasRows] = await connection.execute("SELECT SUM(valorPecas) as total FROM Servico s JOIN OrdemDeServico os ON s.cod_S = os.cod_S WHERE os.dataSaida BETWEEN ? AND ? AND os.status = 'Fechado'", [dataInicio, dataFim]);
         const [ganhosServicosRows] = await connection.execute("SELECT SUM(valorServico) as total FROM Servico s JOIN OrdemDeServico os ON s.cod_S = os.cod_S WHERE os.dataSaida BETWEEN ? AND ? AND os.status = 'Fechado'", [dataInicio, dataFim]);
         const [totalDescontosRows] = await connection.execute("SELECT SUM(desconto) as total FROM Servico s JOIN OrdemDeServico os ON s.cod_S = os.cod_S WHERE os.dataSaida BETWEEN ? AND ? AND os.status = 'Fechado'", [dataInicio, dataFim]);
@@ -405,7 +447,6 @@ app.post('/api/relatorio/detalhado', async (req, res) => {
     }
     try {
         const connection = await mysql.createConnection(dbConfig);
-        // MODIFICADO: Adicionado "AND os.status = 'Fechado'" para o relatório analítico
         const [osRows] = await connection.execute(
             `SELECT 
                 os.cod_Os AS CodigoOS,
@@ -427,6 +468,7 @@ app.post('/api/relatorio/detalhado', async (req, res) => {
     }
 });
 
+// ROTA CORINGA (DEVE SER A ÚLTIMA)
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
