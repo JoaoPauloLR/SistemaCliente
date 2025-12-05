@@ -68,6 +68,8 @@ app.post('/api/login', async (req, res) => {
 });
 
 // --- Endpoints de Clientes ---
+
+// Buscar todos os clientes
 app.get('/api/clientes', async (req, res) => {
     try {
         const connection = await mysql.createConnection(dbConfig);
@@ -79,12 +81,17 @@ app.get('/api/clientes', async (req, res) => {
     }
 });
 
+// CORREÇÃO 2: Busca Inteligente (Ignora maiúsculas/minúsculas)
 app.get('/api/clientes/search', async (req, res) => {
     const searchTerm = req.query.q;
     if (!searchTerm) { return res.json([]); }
     try {
         const connection = await mysql.createConnection(dbConfig);
-        const [rows] = await connection.execute('SELECT CodigoCliente, nome FROM vwClientes WHERE nome LIKE ? LIMIT 10', [`%${searchTerm}%`]);
+        // Usamos LOWER() para comparar tudo em minúsculo
+        const [rows] = await connection.execute(
+            'SELECT CodigoCliente, nome FROM vwClientes WHERE LOWER(nome) LIKE LOWER(?) LIMIT 10', 
+            [`%${searchTerm}%`]
+        );
         await connection.end();
         res.json(rows);
     } catch (error) {
@@ -107,21 +114,16 @@ app.get('/api/clientes/:id', async (req, res) => {
     }
 });
 
-// --- AQUI FOI FEITA A CORREÇÃO PRINCIPAL (INCLUINDO UF) ---
 app.post('/api/clientes', async (req, res) => {
-    // 1. Recebemos 'uf' do frontend
     const { nome, telefone, cep, endereco, bairro, cidade, uf } = req.body;
-    
     if (!nome || !cidade || !uf) {
         return res.status(400).json({ success: false, message: 'Nome, cidade e UF são obrigatórios.' });
     }
-    
     let connection;
     try {
         connection = await mysql.createConnection(dbConfig);
         await connection.beginTransaction();
 
-        // 2. Verificamos se a cidade existe (agora checando Nome E UF)
         let [[cidadeExistente]] = await connection.execute(
             'SELECT cod_Ci FROM Cidade WHERE nome = ? AND UF = ?', 
             [cidade, uf]
@@ -131,7 +133,6 @@ app.post('/api/clientes', async (req, res) => {
         if (cidadeExistente) {
             cidadeId = cidadeExistente.cod_Ci;
         } else {
-            // 3. Se não existe, criamos COM A UF
             const [result] = await connection.execute(
                 'INSERT INTO Cidade (nome, UF) VALUES (?, ?)', 
                 [cidade, uf]
@@ -152,14 +153,12 @@ app.post('/api/clientes', async (req, res) => {
         res.status(201).json({ success: true, message: 'Cliente cadastrado com sucesso!', newId: novoClienteId });
     } catch (error) {
         if (connection) await connection.rollback();
-        // Mostra o erro real se falhar
         res.status(500).json({ success: false, message: 'Erro ao cadastrar: ' + error.message });
     }
 });
 
 app.put('/api/clientes/:id', async (req, res) => {
     const clienteId = req.params.id;
-    // 1. Recebemos 'uf' na edição também
     const { nome, telefone, cep, endereco, bairro, cidade, uf } = req.body;
     
     if (!nome || !cidade || !uf) {
@@ -173,7 +172,6 @@ app.put('/api/clientes/:id', async (req, res) => {
         
         await connection.execute('UPDATE Pessoa SET nome = ? WHERE cod_P = ?', [nome, clienteId]);
         
-        // Lógica de cidade corrigida igual ao POST
         let [[cidadeExistente]] = await connection.execute(
             'SELECT cod_Ci FROM Cidade WHERE nome = ? AND UF = ?', 
             [cidade, uf]
@@ -204,21 +202,28 @@ app.put('/api/clientes/:id', async (req, res) => {
     }
 });
 
+// CORREÇÃO 1: Exclusão de Cliente
 app.delete('/api/clientes/:id', async (req, res) => {
     const clienteId = req.params.id;
     let connection;
     try {
         connection = await mysql.createConnection(dbConfig);
         await connection.beginTransaction();
+
+        // Verifica histórico (segurança)
         const [osRows] = await connection.execute('SELECT COUNT(*) as osCount FROM OrdemDeServico WHERE cod_C = ?', [clienteId]);
         if (osRows[0].osCount > 0) {
             await connection.rollback();
             return res.status(409).json({
                 success: false,
-                message: `Não é possível excluir o cliente pois ele possui ${osRows[0].osCount} ordem(ns) de serviço no histórico.`
+                message: `Não é possível excluir: Cliente possui ${osRows[0].osCount} ordens de serviço.`
             });
         }
+
+        // ORDEM CORRETA: Primeiro deleta o Cliente (filho), depois a Pessoa (pai)
+        await connection.execute('DELETE FROM Cliente WHERE cod_C = ?', [clienteId]);
         await connection.execute('DELETE FROM Pessoa WHERE cod_P = ?', [clienteId]);
+        
         await connection.commit();
         await connection.end();
         res.json({ success: true, message: 'Cliente excluído com sucesso!' });
@@ -229,12 +234,13 @@ app.delete('/api/clientes/:id', async (req, res) => {
 });
 
 // --- Endpoints de Ordem de Serviço ---
+
 app.put('/api/os/:id/status', async (req, res) => {
     const osId = req.params.id;
     const { status } = req.body;
     const validStatus = ['Aberto', 'Fechado', 'Aguardando Pagamento', 'Aguardando Aprovação'];
     if (!status || !validStatus.includes(status)) {
-        return res.status(400).json({ success: false, message: 'Status inválido fornecido.' });
+        return res.status(400).json({ success: false, message: 'Status inválido.' });
     }
     let connection;
     try {
@@ -244,14 +250,14 @@ app.put('/api/os/:id/status', async (req, res) => {
         const [result] = await connection.execute(query, [status, osId]);
         await connection.end();
         if (result.affectedRows === 0) {
-            return res.status(404).json({ success: false, message: 'Ordem de Serviço não encontrada.' });
+            return res.status(404).json({ success: false, message: 'OS não encontrada.' });
         }
-        res.json({ success: true, message: `Status da OS #${osId} atualizado para ${status}.` });
+        res.json({ success: true, message: `Status atualizado para ${status}.` });
     } catch (error) {
-        console.error('Erro ao atualizar status da OS:', error);
-        res.status(500).json({ success: false, message: 'Erro interno do servidor ao atualizar o status.' });
+        res.status(500).json({ success: false, message: 'Erro ao atualizar status.' });
     }
 });
+
 app.get('/api/os', async (req, res) => {
     try {
         const connection = await mysql.createConnection(dbConfig);
@@ -259,9 +265,10 @@ app.get('/api/os', async (req, res) => {
         await connection.end();
         res.json(rows);
     } catch (error) {
-        res.status(500).json({ success: false, message: 'Erro ao buscar Ordens de Serviço.' });
+        res.status(500).json({ success: false, message: 'Erro ao buscar OS.' });
     }
 });
+
 app.get('/api/os/cliente/:id', async (req, res) => {
     try {
         const connection = await mysql.createConnection(dbConfig);
@@ -272,6 +279,7 @@ app.get('/api/os/cliente/:id', async (req, res) => {
         res.status(500).json({ message: 'Erro ao buscar OS do cliente' });
     }
 });
+
 app.get('/api/os/:id', async (req, res) => {
     try {
         const connection = await mysql.createConnection(dbConfig);
@@ -286,6 +294,7 @@ app.get('/api/os/:id', async (req, res) => {
         res.status(500).json({ message: 'Erro ao buscar OS' });
     }
 });
+
 app.post('/api/os', async (req, res) => {
     const { cod_C, cod_F, aparelho_nome, marca, modelo, serie, defeito, descServico, descPecas, valorPecas, valorServico, desconto, dataEntrada, dataSaida, observacao, status } = req.body;
     let connection;
@@ -297,25 +306,25 @@ app.post('/api/os', async (req, res) => {
         if (!cliente) throw new Error("Cliente não encontrado.");
         const cod_Ci = cliente.cod_Ci;
         const [aparelhoResult] = await connection.execute('INSERT INTO Aparelho (codigo, nome, marca, modelo, serie, defeito) VALUES (?, ?, ?, ?, ?, ?)', [aparelho_codigo, aparelho_nome, marca, modelo, serie, defeito]);
-        const novoAparelhoCodigo = aparelhoResult.insertId; // Note: codigo is usually inserted explicitly or AI. If structure changed to AI, use insertId. If manual, use aparelho_codigo.
-        // Based on your SQL: `codigo` bigint(20) NOT NULL (no AUTO_INCREMENT in some versions, but server.js implies insert). 
-        // Let's assume inserting the timestamp as ID is the logic intended:
-        // Actually, let's fix logic: if SQL has no AI on codigo, we must use the value we passed.
-        const finalAparelhoCodigo = novoAparelhoCodigo || aparelho_codigo; 
+        
+        // Correção para garantir código do aparelho
+        const finalAparelhoCodigo = aparelho_codigo; 
 
         const [servicoResult] = await connection.execute('INSERT INTO Servico (descPecas, descServico, valorPecas, valorServico, desconto) VALUES (?, ?, ?, ?, ?)', [descPecas, descServico, valorPecas || 0, valorServico || 0, desconto || 0]);
         const novoServicoId = servicoResult.insertId;
         const isFinalized = status === 'Fechado' || status === 'Aguardando Pagamento';
         const finalDataSaida = (isFinalized && !dataSaida) ? new Date() : (dataSaida || null);
+        
         await connection.execute('INSERT INTO OrdemDeServico (cod_C, cod_F, cod_Ci, cod_S, codigo, dataEntrada, dataSaida, observacao, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [cod_C, cod_F, cod_Ci, novoServicoId, finalAparelhoCodigo, dataEntrada, finalDataSaida, observacao, status]);
         await connection.commit();
         await connection.end();
-        res.status(201).json({ success: true, message: 'Ordem de Serviço criada com sucesso!' });
+        res.status(201).json({ success: true, message: 'OS criada com sucesso!' });
     } catch (error) {
         if (connection) await connection.rollback();
         res.status(500).json({ success: false, message: 'Erro ao criar OS: ' + error.message });
     }
 });
+
 app.put('/api/os/:id', async (req, res) => {
     const osId = req.params.id;
     const { cod_C, aparelho_nome, marca, modelo, serie, defeito, aparelho_codigo, descServico, descPecas, valorPecas, valorServico, desconto, dataEntrada, dataSaida, observacao, status } = req.body;
@@ -325,7 +334,7 @@ app.put('/api/os/:id', async (req, res) => {
         await connection.beginTransaction();
         await connection.execute('UPDATE Aparelho SET nome = ?, marca = ?, modelo = ?, serie = ?, defeito = ? WHERE codigo = ?', [aparelho_nome, marca, modelo, serie, defeito, aparelho_codigo]);
         const [[osRow]] = await connection.execute('SELECT cod_S FROM OrdemDeServico WHERE cod_Os = ?', [osId]);
-        if (!osRow) throw new Error("Ordem de serviço não encontrada para atualização.");
+        if (!osRow) throw new Error("OS não encontrada.");
         const servicoId = osRow.cod_S;
         await connection.execute('UPDATE Servico SET descPecas = ?, descServico = ?, valorPecas = ?, valorServico = ?, desconto = ? WHERE cod_S = ?', [descPecas, descServico, valorPecas || 0, valorServico || 0, desconto || 0, servicoId]);
         const isFinalized = status === 'Fechado' || status === 'Aguardando Pagamento';
@@ -333,19 +342,20 @@ app.put('/api/os/:id', async (req, res) => {
         await connection.execute('UPDATE OrdemDeServico SET cod_C = ?, dataEntrada = ?, dataSaida = ?, observacao = ?, status = ? WHERE cod_Os = ?', [cod_C, dataEntrada, finalDataSaida, observacao, status, osId]);
         await connection.commit();
         await connection.end();
-        res.json({ success: true, message: 'Ordem de Serviço atualizada com sucesso!' });
+        res.json({ success: true, message: 'OS atualizada com sucesso!' });
     } catch (error) {
         if (connection) await connection.rollback();
         res.status(500).json({ success: false, message: 'Erro ao atualizar OS: ' + error.message });
     }
 });
+
 app.delete('/api/os/:id', async (req, res) => {
     const osId = req.params.id;
     try {
         const connection = await mysql.createConnection(dbConfig);
         await connection.execute('DELETE FROM OrdemDeServico WHERE cod_Os = ?', [osId]);
         await connection.end();
-        res.json({ success: true, message: 'Ordem de Serviço excluída com sucesso!' });
+        res.json({ success: true, message: 'OS excluída com sucesso!' });
     } catch (error) {
         res.status(500).json({ success: false, message: 'Erro ao excluir OS.' });
     }
@@ -435,7 +445,6 @@ app.post('/api/relatorio', async (req, res) => {
             osFechadas: osFechadasRows[0].count || 0
         });
     } catch (error) {
-        console.error('Erro ao gerar relatório:', error);
         res.status(500).json({ success: false, message: 'Erro interno do servidor ao gerar relatório.' });
     }
 });
@@ -463,7 +472,6 @@ app.post('/api/relatorio/detalhado', async (req, res) => {
         await connection.end();
         res.json(osRows);
     } catch (error) {
-        console.error('Erro ao gerar relatório detalhado:', error);
         res.status(500).json({ success: false, message: 'Erro interno do servidor ao gerar relatório detalhado.' });
     }
 });
